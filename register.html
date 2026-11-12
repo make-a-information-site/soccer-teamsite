@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>チーム登録｜船橋パレタ</title>
+<meta name="description" content="練習試合を希望するチームの登録フォーム。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<main><div class="wrap">
+  <h1 class="page">チーム登録</h1>
+  <p class="lead">練習試合を希望するチームの登録フォームです。</p>
+  <p class="note">お預かりするのは <strong>チーム名・代表者の呼び名・連絡用メール</strong> など最小限です。電話番号・住所・選手名簿は不要です。登録内容はサイト上に公開しません。くわしくは<a href="privacy.html">個人情報の取り扱い</a>をご覧ください。</p>
+
+  <form id="register-form">
+    <div class="row"><label for="team">チーム名<span class="req">必須</span></label>
+      <input id="team" name="team" type="text" maxlength="50" required></div>
+    <div class="row"><label for="area">活動エリア<span class="req">必須</span></label>
+      <input id="area" name="area" type="text" maxlength="30" required placeholder="例:船橋市、市川市">
+      <p class="hint">市区町村まででかまいません。</p></div>
+    <div class="row"><label for="category">カテゴリ<span class="req">必須</span></label>
+      <select id="category" name="category" required>
+        <option value="">選択してください</option><option>社会人</option><option>シニア(40歳以上中心)</option><option>学生</option><option>ミックス・エンジョイ</option><option>その他</option></select></div>
+    <div class="row"><label for="level">レベル感<span class="opt">任意</span></label>
+      <select id="level" name="level">
+        <option value="">選択しない</option><option>エンジョイ中心</option><option>市民リーグ下位〜中位</option><option>市民リーグ上位</option><option>県リーグ以上</option></select></div>
+    <div class="row"><label for="name">代表者の呼び名<span class="req">必須</span></label>
+      <input id="name" name="name" type="text" maxlength="30" required>
+      <p class="hint">ニックネームや名字のみでかまいません。</p></div>
+    <div class="row"><label for="email">連絡用メール<span class="req">必須</span></label>
+      <input id="email" name="email" type="email" maxlength="100" required autocomplete="email">
+      <p class="hint">チーム共用のアドレスをおすすめします。</p></div>
+    <div class="row"><label>希望曜日<span class="opt">任意</span></label>
+      <label class="check"><input type="checkbox" name="days" value="土曜">土曜</label>
+      <label class="check"><input type="checkbox" name="days" value="日曜">日曜</label>
+      <label class="check"><input type="checkbox" name="days" value="祝日">祝日</label>
+      <label class="check"><input type="checkbox" name="days" value="平日夜">平日夜</label></div>
+    <div class="row"><label for="match">希望する募集枠<span class="opt">任意</span></label>
+      <input id="match" name="match" type="text" maxlength="100" placeholder="練習試合ページから申し込むと自動で入ります"></div>
+    <div class="row"><label for="message">メッセージ<span class="opt">任意</span></label>
+      <textarea id="message" name="message" maxlength="500"></textarea>
+      <p class="hint">個人を特定できる情報(電話番号・住所など)は書かないでください。</p></div>
+    <input type="hidden" name="slot">
+    <div class="hp" aria-hidden="true"><label>入力しないでください<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+    <div class="row"><label class="check"><input type="checkbox" name="agree" required><span><a href="privacy.html" target="_blank" rel="noopener">個人情報の取り扱い</a>に同意します</span></label></div>
+    <button class="btn" type="submit">登録内容を送信する</button>
+    <div id="result" role="status"></div>
+  </form>
+</div></main>
+<script src="assets/config.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

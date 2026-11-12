@@ -1,0 +1,176 @@
+/**
+ * 船橋パレタ 自動投稿・自動マッチング(Google Apps Script / スプレッドシートに紐づけて使う)
+ *
+ * スクリプトプロパティ:
+ *   HOOK_KEY    LINE Webhook URL に付ける合言葉(長いランダム文字列)
+ *   LINE_TOKEN  LINE チャネルアクセストークン
+ *   ADMIN_IDS   投稿を許可する LINE ユーザーID(カンマ区切り)
+ *   GH_TOKEN    GitHub fine-grained トークン(対象リポジトリの Contents: Read and write のみ)
+ *   GH_REPO     例: make-a-information-site/soccer-teamsite
+ *   GH_BRANCH   例: main
+ *   SITE_URL    公開サイトのURL(末尾スラッシュなし)
+ */
+var P = PropertiesService.getScriptProperties();
+var SHEETS = {
+  '予定': ['id', 'date', 'start', 'end', 'type', 'title', 'place', 'note'],
+  '募集': ['id', 'date', 'start', 'end', 'place', 'format', 'level', 'status', 'note'],
+  'チーム': ['email', 'team', 'area', 'category', 'level', 'name', 'days', 'updated'],
+  '申込': ['id', 'slot', 'email', 'team', 'status', 'created']
+};
+
+function setup() { Object.keys(SHEETS).forEach(sheet_); }
+
+function sheet_(name) {
+  var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(name);
+  if (!sh) { sh = ss.insertSheet(name); sh.appendRow(SHEETS[name]); sh.setFrozenRows(1); sh.getRange('A:Z').setNumberFormat('@'); }
+  return sh;
+}
+function rows_(name) {
+  var v = sheet_(name).getDataRange().getDisplayValues(), h = SHEETS[name];
+  return v.slice(1).map(function (r, i) { var o = { _row: i + 2 }; h.forEach(function (k, j) { o[k] = r[j] || ''; }); return o; });
+}
+function append_(name, o) { sheet_(name).appendRow(SHEETS[name].map(function (k) { return o[k] == null ? '' : o[k]; })); }
+function setCell_(name, row, key, val) { sheet_(name).getRange(row, SHEETS[name].indexOf(key) + 1).setValue(val); }
+function nextId_(name, prefix) {
+  var max = 0; rows_(name).forEach(function (r) { var n = +String(r.id).replace(/\D/g, ''); if (n > max) max = n; });
+  return prefix + (max + 1);
+}
+function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+function admins_() { return (P.getProperty('ADMIN_IDS') || '').split(',').map(function (s) { return s.trim(); }).filter(String); }
+
+// ---------- 入口 ----------
+function doPost(e) {
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var body = JSON.parse(e.postData.contents);
+    if (body.events) {                       // LINE から
+      if (!P.getProperty('HOOK_KEY') || e.parameter.k !== P.getProperty('HOOK_KEY')) return json_({ ok: false });
+      body.events.forEach(lineEvent_);
+      return json_({ ok: true });
+    }
+    return json_({ ok: formSubmit_(body) });  // サイトのフォームから
+  } catch (err) {
+    console.error(err);
+    return json_({ ok: false });
+  } finally { lock.releaseLock(); }
+}
+
+// ---------- LINE ----------
+function lineEvent_(ev) {
+  var uid = ev.source && ev.source.userId, isAdmin = admins_().indexOf(uid) >= 0;
+  if (ev.type === 'postback' && isAdmin) return reply_(ev.replyToken, decide_(ev.postback.data));
+  if (ev.type !== 'message' || ev.message.type !== 'text') return;
+  var c = parseCommand(ev.message.text, new Date());
+  if (c.cmd === 'id') return reply_(ev.replyToken, 'あなたのID:\n' + uid + '\nこれをサイト運営者に伝えてください。');
+  if (!isAdmin) return;                       // 管理者以外には反応しない
+  var msg;
+  if (c.cmd === 'schedule') {
+    c.id = nextId_('予定', 'Y'); c.title = c.type === '練習' ? '通常練習' : c.type;
+    append_('予定', c); publish_();
+    msg = '予定をのせました✅\n' + fmtRow(c.id, c) + '(' + c.type + ')\n\n取り消すときは「削除 ' + c.id + '」';
+  } else if (c.cmd === 'slot') {
+    c.id = nextId_('募集', 'B'); c.status = '募集中'; c.format = '11人制';
+    append_('募集', c); publish_();
+    var n = notifyTeams_(c);
+    msg = '募集をのせました✅\n' + fmtRow(c.id, c) + '\n登録チーム ' + n + ' 件にメールでお知らせしました。\n\n取り消すときは「削除 ' + c.id + '」';
+  } else if (c.cmd === 'list') {
+    var today = ymd(new Date()), f = function (r) { return r.date >= today; };
+    var a = rows_('予定').filter(f).map(function (r) { return fmtRow(r.id, r); });
+    var b = rows_('募集').filter(f).map(function (r) { return fmtRow(r.id, r) + '【' + r.status + '】'; });
+    msg = '■予定\n' + (a.join('\n') || 'なし') + '\n\n■募集\n' + (b.join('\n') || 'なし');
+  } else if (c.cmd === 'delete') {
+    var name = c.id.charAt(0) === 'Y' ? '予定' : '募集';
+    var hit = rows_(name).filter(function (r) { return r.id === c.id; })[0];
+    if (hit) { sheet_(name).deleteRow(hit._row); publish_(); msg = c.id + ' を消しました。'; }
+    else msg = c.id + ' が見つかりません。「一覧」で確認してください。';
+  } else if (c.cmd === 'error') msg = c.message;
+  else msg = HELP;
+  reply_(ev.replyToken, msg);
+}
+
+function line_(path, payload) {
+  UrlFetchApp.fetch('https://api.line.me/v2/bot/message/' + path, { method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + P.getProperty('LINE_TOKEN') }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+}
+function reply_(token, text) { if (text) line_('reply', { replyToken: token, messages: [{ type: 'text', text: text.slice(0, 4900) }] }); }
+
+// ---------- フォーム(チーム登録・申し込み) ----------
+function formSubmit_(raw) {
+  var d = cleanForm(raw || {}); if (!d) return false;
+  var teams = rows_('チーム'), old = teams.filter(function (t) { return t.email === d.email; })[0];
+  d.updated = ymd(new Date());
+  if (old) SHEETS['チーム'].forEach(function (k) { setCell_('チーム', old._row, k, d[k]); }); else append_('チーム', d);
+
+  var slot = d.slot && rows_('募集').filter(function (s) { return s.id === d.slot && s.status === '募集中'; })[0];
+  var dup = slot && rows_('申込').some(function (a) { return a.slot === slot.id && a.email === d.email && a.status === '確認中'; });
+  if (slot && !dup) {
+    var id = nextId_('申込', 'A');
+    append_('申込', { id: id, slot: slot.id, email: d.email, team: d.team, status: '確認中', created: d.updated });
+    var text = '練習試合の申し込みが来ました\n' + fmtRow('', slot).trim() + '\nチーム:' + d.team + '(' + d.area + ' / ' + d.category + (d.level ? ' / ' + d.level : '') + ')';
+    admins_().forEach(function (to) {
+      line_('push', { to: to, messages: [{ type: 'template', altText: text, template: { type: 'confirm', text: text.slice(0, 240),
+        actions: [{ type: 'postback', label: '受ける', data: 'ok:' + id, displayText: '受ける' }, { type: 'postback', label: '見送る', data: 'ng:' + id, displayText: '見送る' }] } }] });
+    });
+  }
+  mail_(d.email, '受け付けました', d.team + ' 様\n\n' + (slot ? '練習試合の申し込みを受け付けました。担当者が確認し、結果をメールでお知らせします。\n' + fmtRow('', slot).trim()
+    : 'チーム登録を受け付けました。新しい募集枠が出た際にメールでお知らせします。') + '\n\n登録の削除をご希望の場合は、このメールにその旨をご返信ください。');
+  return true;
+}
+
+// 管理者が「受ける / 見送る」を押したとき
+function decide_(data) {
+  var m = /^(ok|ng):(A\d+)$/.exec(data || ''); if (!m) return '';
+  var apps = rows_('申込'), app = apps.filter(function (a) { return a.id === m[2]; })[0];
+  if (!app || app.status !== '確認中') return 'この申し込みは処理済みです。';
+  var slot = rows_('募集').filter(function (s) { return s.id === app.slot; })[0];
+  var when = slot ? fmtRow('', slot).trim() : '';
+  if (m[1] === 'ng' || !slot || slot.status !== '募集中') {
+    setCell_('申込', app._row, 'status', '見送り');
+    mail_(app.email, '練習試合のお申し込みについて', app.team + ' 様\n\n今回は日程の都合によりお受けできませんでした。\n' + when + '\nまたの機会にぜひお願いいたします。');
+    return app.team + ' を見送りにしました(先方にメール済み)。';
+  }
+  setCell_('申込', app._row, 'status', '決定');
+  setCell_('募集', slot._row, 'status', '決定');
+  append_('予定', { id: nextId_('予定', 'Y'), date: slot.date, start: slot.start, end: slot.end, type: '練習試合', title: '練習試合', place: slot.place, note: '' });
+  mail_(app.email, '練習試合が決定しました', app.team + ' 様\n\n以下の練習試合が決定しました。\n' + when + '\n\n当日の詳細は、このメールへの返信でご相談ください。');
+  apps.forEach(function (a) {              // 同じ枠のほかの申し込みは見送り
+    if (a.slot === slot.id && a.id !== app.id && a.status === '確認中') {
+      setCell_('申込', a._row, 'status', '見送り');
+      mail_(a.email, '練習試合のお申し込みについて', a.team + ' 様\n\n先に他チームとの対戦が決まりました。\n' + when + '\nまたの機会にぜひお願いいたします。');
+    }
+  });
+  publish_();
+  return app.team + ' との練習試合を決定にしました✅\n予定表にものせ、先方にメールしました。';
+}
+
+function notifyTeams_(slot) {
+  var list = teamsToNotify(rows_('チーム'), slot).slice(0, 80);   // 無料枠のメール上限(1日100通)に配慮
+  var url = (P.getProperty('SITE_URL') || '') + '/matching.html';
+  list.forEach(function (t) {
+    mail_(t.email, '練習試合の募集枠が出ました', t.team + ' 様\n\n新しい募集枠です。\n' + fmtRow('', slot).trim() + '\n\nお申し込みはこちら:\n' + url + '\n\n配信停止をご希望の場合は、このメールにその旨をご返信ください。');
+  });
+  return list.length;
+}
+function mail_(to, subject, body) {
+  try { MailApp.sendEmail({ to: to, subject: '【船橋パレタ】' + subject, body: body, name: '船橋パレタ' }); } catch (err) { console.error(err); }
+}
+
+// ---------- サイトへ反映(GitHub に JSON をコミット) ----------
+function publish_() {
+  var today = ymd(new Date()), keep = function (r) { return r.date >= today; }, strip = function (r) { var o = {}; Object.keys(r).forEach(function (k) { if (k !== '_row') o[k] = r[k]; }); return o; };
+  put_('data/schedule.json', rows_('予定').filter(keep).map(strip));
+  put_('data/matches.json', rows_('募集').filter(keep).map(strip));
+}
+function put_(path, data) {
+  var api = 'https://api.github.com/repos/' + P.getProperty('GH_REPO') + '/contents/' + path, branch = P.getProperty('GH_BRANCH') || 'main';
+  var headers = { Authorization: 'Bearer ' + P.getProperty('GH_TOKEN'), Accept: 'application/vnd.github+json' };
+  var content = Utilities.base64Encode(JSON.stringify(data, null, 2) + '\n', Utilities.Charset.UTF_8);
+  var cur = UrlFetchApp.fetch(api + '?ref=' + encodeURIComponent(branch), { headers: headers, muteHttpExceptions: true }), sha;
+  if (cur.getResponseCode() === 200) {
+    var j = JSON.parse(cur.getContentText()); sha = j.sha;
+    if (String(j.content).replace(/\s/g, '') === content) return;   // 変更なし
+  }
+  var res = UrlFetchApp.fetch(api, { method: 'put', headers: headers, contentType: 'application/json', muteHttpExceptions: true,
+    payload: JSON.stringify({ message: 'サイト更新: ' + path, content: content, branch: branch, sha: sha }) });
+  if (res.getResponseCode() >= 300) throw new Error('GitHub ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
+}
