@@ -73,7 +73,9 @@ function sheet_(name) {
 }
 function rows_(name) {
   var v = sheet_(name).getDataRange().getDisplayValues(), h = SHEETS[name];
-  return v.slice(1).map(function (r, i) { var o = { _row: i + 2 }; h.forEach(function (k, j) { o[k] = r[j] || ''; }); return o; });
+  return v.slice(1).map(function (r, i) { var o = { _row: i + 2 }; h.forEach(function (k, j) { o[k] = r[j] || ''; });
+    ['start', 'end'].forEach(function (k) { if (/^\d:\d\d$/.test(o[k] || '')) o[k] = '0' + o[k]; });   // シートが 09:00 を 9:00 と表示しても揃える
+    return o; });
 }
 function append_(name, o) { sheet_(name).appendRow(SHEETS[name].map(function (k) { return o[k] == null ? '' : o[k]; })); }
 function setCell_(name, row, key, val) { sheet_(name).getRange(row, SHEETS[name].indexOf(key) + 1).setValue(val); }
