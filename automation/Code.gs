@@ -10,6 +10,7 @@
  *   GH_BRANCH   例: main
  *   SITE_URL    公開サイトのURL(末尾スラッシュなし)
  */
+var VERSION = 4;   // コードを更新したら増やす。check が「公開中の版」と照合する
 var P = PropertiesService.getScriptProperties();
 var SHEETS = {
   '予定': ['id', 'date', 'start', 'end', 'type', 'title', 'place', 'note'],
@@ -38,6 +39,17 @@ function check() {
     out.push((w.active ? '○ Webhook の利用: オン' : '× Webhook の利用がオフです'));
     out.push((/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec\?k=/.test(url) ? '○' : '×') + ' Webhook URL の形: ' + url.replace(/\?k=.*/, '?k=…'));
     out.push((url.split('?k=')[1] === get('HOOK_KEY') ? '○ URL の ?k= と HOOK_KEY が一致' : '× URL の ?k= と HOOK_KEY が一致しません'));
+    // LINE が実際に呼ぶ URL を、外部から(ログインなしで)呼んでみる
+    var g = UrlFetchApp.fetch(url.split('?')[0], { muteHttpExceptions: true }), pub = null;
+    try { pub = JSON.parse(g.getContentText()); } catch (err) {}
+    if (pub && pub.version === VERSION) out.push('○ 公開中のコードは最新(版 ' + VERSION + ')');
+    else if (pub) out.push('× 公開中のコードが古い版です。「デプロイを管理」→ 鉛筆 →「新バージョン」でデプロイし直してください');
+    else if (/accounts\.google\.com|ServiceLogin|signin/i.test(g.getContentText()) || g.getResponseCode() === 401 || g.getResponseCode() === 403) out.push('× 外部から呼べません。デプロイの「アクセスできるユーザー」を「全員」にしてください');
+    else out.push('× この URL のデプロイは古いコードのままです(' + g.getResponseCode() + ')。「デプロイを管理」でこの URL のデプロイを選び、鉛筆 →「新バージョン」でデプロイし直してください');
+    if (pub && pub.version === VERSION) {
+      var t = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ events: [] }), muteHttpExceptions: true });
+      out.push(/"ok":true/.test(t.getContentText()) ? '○ Webhook の受信テスト: 成功' : '× Webhook の受信テスト: 失敗(' + t.getResponseCode() + ')');
+    }
   } else out.push('× Webhook URL が未設定、または取得できません(' + r.getResponseCode() + ')');
   r = UrlFetchApp.fetch('https://api.github.com/repos/' + get('GH_REPO').trim(), { headers: { Authorization: 'Bearer ' + get('GH_TOKEN').trim(), Accept: 'application/vnd.github+json' }, muteHttpExceptions: true });
   if (r.getResponseCode() === 200) { var perm = JSON.parse(r.getContentText()).permissions || {}; out.push(perm.push ? '○ GitHub: 書き込みできます' : '× GitHub: 読めますが書き込み権限がありません(Contents: Read and write が必要)'); }
@@ -72,6 +84,7 @@ function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).se
 function admins_() { return (P.getProperty('ADMIN_IDS') || '').split(',').map(function (s) { return s.trim(); }).filter(String); }
 
 // ---------- 入口 ----------
+function doGet() { return json_({ ok: true, version: VERSION }); }
 function doPost(e) {
   var lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
