@@ -10,7 +10,7 @@
  *   GH_BRANCH   例: main
  *   SITE_URL    公開サイトのURL(末尾スラッシュなし)
  */
-var VERSION = 5;   // コードを更新したら増やす。check が「公開中の版」と照合する
+var VERSION = 6;   // コードを更新したら増やす。check が「公開中の版」と照合する
 var P = PropertiesService.getScriptProperties();
 var SHEETS = {
   '予定': ['id', 'date', 'start', 'end', 'type', 'title', 'place', 'note'],
@@ -29,7 +29,8 @@ function check() {
     out.push((v ? (v !== v.trim() ? '△ 前後に空白あり' : '○ 設定あり') : '× 未設定') + '  ' + k + (v ? '(' + v.length + '文字)' : ''));
   });
   if (get('LINE_TOKEN').length < 100) out.push('× LINE_TOKEN が短すぎます。チャネルシークレットではなく「チャネルアクセストークン(長期)」を入れてください');
-  get('ADMIN_IDS').split(',').forEach(function (id) { if (id.trim() && !/^U[0-9a-f]{32}$/.test(id.trim())) out.push('× ADMIN_IDS の形式が違います(U+英数字32文字): ' + id.trim().slice(0, 4) + '…'); });
+  out.push((admins_().length ? '○' : '×') + ' 管理者として読み取れたID: ' + admins_().length + ' 件(' + admins_().map(function (id) { return id.slice(0, 5) + '…'; }).join('、') + ')');
+  if (get('ADMIN_IDS').replace(/U[0-9a-f]{32}/g, '').replace(/[\s,、,]/g, '')) out.push('△ ADMIN_IDS に、IDとして読み取れない文字が混ざっています(IDの写し間違いの可能性)');
   var h = { headers: { Authorization: 'Bearer ' + get('LINE_TOKEN').trim() }, muteHttpExceptions: true };
   var r = UrlFetchApp.fetch('https://api.line.me/v2/bot/info', h);
   out.push((r.getResponseCode() === 200 ? '○ LINE_TOKEN は有効: ' + JSON.parse(r.getContentText()).displayName : '× LINE_TOKEN が無効(' + r.getResponseCode() + ')'));
@@ -81,7 +82,8 @@ function nextId_(name, prefix) {
   return prefix + (max + 1);
 }
 function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
-function admins_() { return (P.getProperty('ADMIN_IDS') || '').split(',').map(function (s) { return s.trim(); }).filter(String); }
+// 区切りが全角カンマ・空白・改行でも拾えるよう、U+英数字32文字の並びをすべて取り出す
+function admins_() { return (P.getProperty('ADMIN_IDS') || '').match(/U[0-9a-f]{32}/g) || []; }
 
 // ---------- 入口 ----------
 function doGet() { return json_({ ok: true, version: VERSION }); }
