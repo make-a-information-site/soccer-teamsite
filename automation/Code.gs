@@ -10,7 +10,7 @@
  *   GH_BRANCH   例: main
  *   SITE_URL    公開サイトのURL(末尾スラッシュなし)
  */
-var VERSION = 4;   // コードを更新したら増やす。check が「公開中の版」と照合する
+var VERSION = 5;   // コードを更新したら増やす。check が「公開中の版」と照合する
 var P = PropertiesService.getScriptProperties();
 var SHEETS = {
   '予定': ['id', 'date', 'start', 'end', 'type', 'title', 'place', 'note'],
@@ -108,7 +108,13 @@ function lineEvent_(ev) {
   if (ev.type !== 'message' || ev.message.type !== 'text') return;
   var c = parseCommand(ev.message.text, new Date());
   if (c.cmd === 'id') return reply_(ev.replyToken, 'あなたのID:\n' + uid + '\nこれをサイト運営者に伝えてください。');
-  if (!isAdmin) return;                       // 管理者以外には反応しない
+  if (!isAdmin) return reply_(ev.replyToken, 'このアカウントは、登録された管理者だけが投稿できます。\n管理者の方は「ID」と送り、返ってきたIDをサイト運営者に伝えてください。');
+  var msg;
+  try { msg = command_(c); } catch (err) { console.error(err); msg = 'うまくいきませんでした。この文面をサイト運営者に伝えてください。\n\n' + String(err && err.message || err).slice(0, 300); }
+  reply_(ev.replyToken, msg);
+}
+
+function command_(c) {
   var msg;
   if (c.cmd === 'schedule') {
     c.id = nextId_('予定', 'Y'); c.title = c.type === '練習' ? '通常練習' : c.type;
@@ -131,7 +137,7 @@ function lineEvent_(ev) {
     else msg = c.id + ' が見つかりません。「一覧」で確認してください。';
   } else if (c.cmd === 'error') msg = c.message;
   else msg = HELP;
-  reply_(ev.replyToken, msg);
+  return msg;
 }
 
 function line_(path, payload) {
@@ -219,5 +225,6 @@ function put_(path, data) {
   }
   var res = UrlFetchApp.fetch(api, { method: 'put', headers: headers, contentType: 'application/json', muteHttpExceptions: true,
     payload: JSON.stringify({ message: 'サイト更新: ' + path, content: content, branch: branch, sha: sha }) });
-  if (res.getResponseCode() >= 300) throw new Error('GitHub ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
+  if (res.getResponseCode() >= 300) throw new Error('サイトへの反映に失敗(GitHub ' + res.getResponseCode() + ')。' +
+    (res.getResponseCode() === 403 || res.getResponseCode() === 404 ? 'GH_TOKEN の権限が「Contents: Read and write」になっているか、対象リポジトリが soccer-teamsite か、組織で承認待ちになっていないかを確認してください。' : '') + res.getContentText().slice(0, 120));
 }
