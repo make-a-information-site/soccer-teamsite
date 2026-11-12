@@ -20,6 +20,31 @@ var SHEETS = {
 
 function setup() { Object.keys(SHEETS).forEach(sheet_); }
 
+// 設定の点検。エディタで check を選んで実行し、下の「実行ログ」を見る。秘密の値は表示しない。
+function check() {
+  var out = [], get = function (k) { return (P.getProperty(k) || ''); };
+  ['HOOK_KEY', 'LINE_TOKEN', 'ADMIN_IDS', 'GH_TOKEN', 'GH_REPO', 'GH_BRANCH', 'SITE_URL'].forEach(function (k) {
+    var v = get(k);
+    out.push((v ? (v !== v.trim() ? '△ 前後に空白あり' : '○ 設定あり') : '× 未設定') + '  ' + k + (v ? '(' + v.length + '文字)' : ''));
+  });
+  if (get('LINE_TOKEN').length < 100) out.push('× LINE_TOKEN が短すぎます。チャネルシークレットではなく「チャネルアクセストークン(長期)」を入れてください');
+  get('ADMIN_IDS').split(',').forEach(function (id) { if (id.trim() && !/^U[0-9a-f]{32}$/.test(id.trim())) out.push('× ADMIN_IDS の形式が違います(U+英数字32文字): ' + id.trim().slice(0, 4) + '…'); });
+  var h = { headers: { Authorization: 'Bearer ' + get('LINE_TOKEN').trim() }, muteHttpExceptions: true };
+  var r = UrlFetchApp.fetch('https://api.line.me/v2/bot/info', h);
+  out.push((r.getResponseCode() === 200 ? '○ LINE_TOKEN は有効: ' + JSON.parse(r.getContentText()).displayName : '× LINE_TOKEN が無効(' + r.getResponseCode() + ')'));
+  r = UrlFetchApp.fetch('https://api.line.me/v2/bot/channel/webhook/endpoint', h);
+  if (r.getResponseCode() === 200) {
+    var w = JSON.parse(r.getContentText()), url = String(w.endpoint || '');
+    out.push((w.active ? '○ Webhook の利用: オン' : '× Webhook の利用がオフです'));
+    out.push((/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec\?k=/.test(url) ? '○' : '×') + ' Webhook URL の形: ' + url.replace(/\?k=.*/, '?k=…'));
+    out.push((url.split('?k=')[1] === get('HOOK_KEY') ? '○ URL の ?k= と HOOK_KEY が一致' : '× URL の ?k= と HOOK_KEY が一致しません'));
+  } else out.push('× Webhook URL が未設定、または取得できません(' + r.getResponseCode() + ')');
+  r = UrlFetchApp.fetch('https://api.github.com/repos/' + get('GH_REPO').trim(), { headers: { Authorization: 'Bearer ' + get('GH_TOKEN').trim(), Accept: 'application/vnd.github+json' }, muteHttpExceptions: true });
+  if (r.getResponseCode() === 200) { var perm = JSON.parse(r.getContentText()).permissions || {}; out.push(perm.push ? '○ GitHub: 書き込みできます' : '× GitHub: 読めますが書き込み権限がありません(Contents: Read and write が必要)'); }
+  else out.push('× GitHub に接続できません(' + r.getResponseCode() + ')。GH_TOKEN / GH_REPO、または組織での承認待ちを確認');
+  console.log(out.join('\n'));
+}
+
 function sheet_(name) {
   var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(name);
   if (!sh) { sh = ss.insertSheet(name); sh.appendRow(SHEETS[name]); sh.setFrozenRows(1); sh.getRange('A:Z').setNumberFormat('@'); }
@@ -44,7 +69,7 @@ function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
     if (body.events) {                       // LINE から
-      if (!P.getProperty('HOOK_KEY') || e.parameter.k !== P.getProperty('HOOK_KEY')) return json_({ ok: false });
+      if (!P.getProperty('HOOK_KEY') || e.parameter.k !== P.getProperty('HOOK_KEY')) { console.error('Webhook URL の ?k= と HOOK_KEY が一致しません'); return json_({ ok: false }); }
       body.events.forEach(lineEvent_);
       return json_({ ok: true });
     }
@@ -89,8 +114,9 @@ function lineEvent_(ev) {
 }
 
 function line_(path, payload) {
-  UrlFetchApp.fetch('https://api.line.me/v2/bot/message/' + path, { method: 'post', contentType: 'application/json',
+  var res = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/' + path, { method: 'post', contentType: 'application/json',
     headers: { Authorization: 'Bearer ' + P.getProperty('LINE_TOKEN') }, payload: JSON.stringify(payload), muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) console.error('LINE への送信に失敗: ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
 }
 function reply_(token, text) { if (text) line_('reply', { replyToken: token, messages: [{ type: 'text', text: text.slice(0, 4900) }] }); }
 
