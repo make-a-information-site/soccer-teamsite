@@ -18,7 +18,7 @@ var SHEETS = {
   '申込': ['id', 'slot', 'email', 'team', 'status', 'created']
 };
 
-function setup() { Object.keys(SHEETS).forEach(sheet_); }
+function setup() { Object.keys(SHEETS).forEach(sheet_); console.log('準備できました。台帳: ' + ss_().getUrl()); }
 
 // 設定の点検。エディタで check を選んで実行し、下の「実行ログ」を見る。秘密の値は表示しない。
 function check() {
@@ -45,8 +45,16 @@ function check() {
   console.log(out.join('\n'));
 }
 
+// 台帳のスプレッドシート。シートに紐づかない単独のスクリプトでも動くよう、無ければ自動で作って ID を覚える。
+function ss_() {
+  var a = SpreadsheetApp.getActive(); if (a) return a;
+  var id = P.getProperty('SHEET_ID'); if (id) return SpreadsheetApp.openById(id);
+  var n = SpreadsheetApp.create('船橋パレタ 台帳'); P.setProperty('SHEET_ID', n.getId());
+  console.log('台帳のスプレッドシートを作成しました: ' + n.getUrl());
+  return n;
+}
 function sheet_(name) {
-  var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(name);
+  var ss = ss_(), sh = ss.getSheetByName(name);
   if (!sh) { sh = ss.insertSheet(name); sh.appendRow(SHEETS[name]); sh.setFrozenRows(1); sh.getRange('A:Z').setNumberFormat('@'); }
   return sh;
 }
