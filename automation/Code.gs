@@ -10,7 +10,7 @@
  *   GH_BRANCH   例: main
  *   SITE_URL    公開サイトのURL(末尾スラッシュなし)
  */
-var VERSION = 7;   // コードを更新したら増やす。check が「公開中の版」と照合する
+var VERSION = 8;   // コードを更新したら増やす。check が「公開中の版」と照合する
 var P = PropertiesService.getScriptProperties();
 var SHEETS = {
   '予定': ['id', 'date', 'start', 'end', 'type', 'title', 'place', 'note'],
@@ -185,6 +185,10 @@ function reply_(token, text) { if (text) line_('reply', { replyToken: token, mes
 // ---------- フォーム(チーム登録・申し込み) ----------
 function formSubmit_(raw) {
   var d = cleanForm(raw || {}); if (!d) return false;
+  // いたずら対策: フォームの受付は1時間あたり30件まで(メール送信枠を使い切られないように)
+  var fc = CacheService.getScriptCache(), n = +(fc.get('formcount') || 0);
+  if (n >= 30) { console.error('フォームの受付が上限に達しました'); return false; }
+  fc.put('formcount', String(n + 1), 3600);
   var teams = rows_('チーム'), old = teams.filter(function (t) { return t.email === d.email; })[0];
   d.updated = ymd(new Date());
   if (old) SHEETS['チーム'].forEach(function (k) { setCell_('チーム', old._row, k, d[k]); }); else append_('チーム', d);
