@@ -10,7 +10,7 @@
  *   GH_BRANCH   例: main
  *   SITE_URL    公開サイトのURL(末尾スラッシュなし)
  */
-var VERSION = 6;   // コードを更新したら増やす。check が「公開中の版」と照合する
+var VERSION = 7;   // コードを更新したら増やす。check が「公開中の版」と照合する
 var P = PropertiesService.getScriptProperties();
 var SHEETS = {
   '予定': ['id', 'date', 'start', 'end', 'type', 'title', 'place', 'note'],
@@ -108,11 +108,26 @@ function doPost(e) {
 // ---------- LINE ----------
 function lineEvent_(ev) {
   var uid = ev.source && ev.source.userId, isAdmin = admins_().indexOf(uid) >= 0;
-  if (ev.type === 'postback' && isAdmin) return reply_(ev.replyToken, decide_(ev.postback.data));
+  if (ev.type === 'postback') {
+    if (!isAdmin) return;
+    var data = String(ev.postback.data || '');
+    if (/^(ok|ng):/.test(data)) return reply_(ev.replyToken, decide_(data));
+    return wizard_(ev, uid, wizardStep(data, ev.postback.params, places_()));
+  }
   if (ev.type !== 'message' || ev.message.type !== 'text') return;
   var c = parseCommand(ev.message.text, new Date());
   if (c.cmd === 'id') return reply_(ev.replyToken, 'あなたのID:\n' + uid + '\nこれをサイト運営者に伝えてください。');
   if (!isAdmin) return reply_(ev.replyToken, 'このアカウントは、登録された管理者だけが投稿できます。\n管理者の方は「ID」と送り、返ってきたIDをサイト運営者に伝えてください。');
+  var cache = CacheService.getScriptCache(), pend = cache.get('pend:' + uid);
+  if (c.cmd === 'menu') { cache.remove('pend:' + uid); return replyMsg_(ev.replyToken, menuMessage(new Date())); }
+  if (c.cmd === 'unknown') {
+    if (pend) {                               // ボタン入力の途中: この文面を会場名として受け取る
+      var w = JSON.parse(pend);
+      return wizard_(ev, uid, { create: wizardCommand(w.kind, w.date, w.start, w.end, ev.message.text) });
+    }
+    return replyMsg_(ev.replyToken, menuMessage(new Date()));
+  }
+  cache.remove('pend:' + uid);
   var msg;
   try { msg = command_(c); } catch (err) { console.error(err); msg = 'うまくいきませんでした。この文面をサイト運営者に伝えてください。\n\n' + String(err && err.message || err).slice(0, 300); }
   reply_(ev.replyToken, msg);
@@ -148,6 +163,22 @@ function line_(path, payload) {
   var res = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/' + path, { method: 'post', contentType: 'application/json',
     headers: { Authorization: 'Bearer ' + P.getProperty('LINE_TOKEN') }, payload: JSON.stringify(payload), muteHttpExceptions: true });
   if (res.getResponseCode() !== 200) console.error('LINE への送信に失敗: ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
+}
+function replyMsg_(token, message) { line_('reply', { replyToken: token, messages: [message] }); }
+function places_() { return recentPlaces(rows_('予定').concat(rows_('募集')), 8); }
+var NEXT_ = [{ type: 'message', label: '続けてのせる', text: 'メニュー' }, { type: 'message', label: '一覧を見る', text: '一覧' }];
+
+// ボタン入力の1ステップを処理する
+function wizard_(ev, uid, step) {
+  var cache = CacheService.getScriptCache();
+  if (step.create) {
+    cache.remove('pend:' + uid);
+    var msg;
+    try { msg = command_(step.create); } catch (err) { console.error(err); msg = 'うまくいきませんでした。この文面をサイト運営者に伝えてください。\n\n' + String(err && err.message || err).slice(0, 300); }
+    return replyMsg_(ev.replyToken, { type: 'text', text: msg.slice(0, 4900), quickReply: quick_(NEXT_) });
+  }
+  if (step.pending) cache.put('pend:' + uid, JSON.stringify(step.pending), 1800); else cache.remove('pend:' + uid);
+  replyMsg_(ev.replyToken, step.message);
 }
 function reply_(token, text) { if (text) line_('reply', { replyToken: token, messages: [{ type: 'text', text: text.slice(0, 4900) }] }); }
 

@@ -20,3 +20,24 @@ eq(ctx.cleanForm({ ...ok, email: 'x' }), null); eq(ctx.cleanForm({ ...ok, team: 
 eq(ctx.cleanForm({ ...ok, email: 'a@b.jp,evil@x.jp' }), null);
 eq(ctx.cleanForm({ ...ok, team: '=HYPERLINK("x")' }).team, '\'=HYPERLINK("x")');
 console.log('all tests passed');
+
+// ---- ボタン入力 ----
+const menu = ctx.menuMessage(now);
+eq(menu.quickReply.items.length, 6); eq(menu.quickReply.items[0].action.initial, '2026-11-13T09:00'); eq(menu.quickReply.items[3].action.data, 'w1|募集');
+let s1 = ctx.wizardStep('w1|練習', { datetime: '2026-12-13T09:00' }, []);
+eq(s1.message.quickReply.items.length, 6); eq(s1.message.quickReply.items[2].action.data, 'w2|練習|2026-12-13|09:00|11:00');
+eq(ctx.wizardStep('w1|練習', { datetime: '2026-12-13T22:30' }, []).message.quickReply.items.map(i => i.action.label), ['1時間(23:30まで)', '終了時刻を選ぶ']);
+let s2 = ctx.wizardStep('w2|練習|2026-12-13|09:00|11:00', null, ['Aグラウンド', 'B|x']);
+eq(s2.pending, { kind: '練習', date: '2026-12-13', start: '09:00', end: '11:00' }); eq(s2.message.quickReply.items[0].action.data, 'w3|練習|2026-12-13|09:00|11:00|Aグラウンド');
+assert(!ctx.wizardStep('w2|練習|2026-12-13|09:00|11:00', null, []).message.quickReply);
+eq(ctx.wizardStep('w2t|募集|2026-12-13|09:00', { time: '12:15' }, []).pending.end, '12:15');
+assert(!ctx.wizardStep('w2t|募集|2026-12-13|09:00', { time: '08:00' }, []).pending);
+eq(ctx.wizardStep('w3|公式戦|2026-12-13|09:00|11:00|Aグラウンド').create, { cmd: 'schedule', date: '2026-12-13', start: '09:00', end: '11:00', place: 'Aグラウンド', note: '', type: '公式戦' });
+eq(ctx.wizardStep('w3|募集|2026-12-13|09:00|11:00|B').create.cmd, 'slot');
+for (const bad of ['w3|x|2026-12-13|09:00|11:00|A', 'w3|練習|2026-12-13|09:00|08:00|A', 'w3|練習|2026-12-13|09:00|11:00|', 'zz', 'w1|練習']) assert(ctx.wizardStep(bad, {}, []).message, bad);
+eq(ctx.recentPlaces([{ place: 'A' }, { place: 'B' }, { place: 'A' }, { place: '' }]), ['A', 'B']);
+eq(pc('メニュー').cmd, 'menu'); eq(pc('予定').cmd, 'menu'); eq(pc('募集').cmd, 'menu'); eq(pc('予定 12/13 9:00 A').cmd, 'schedule');
+// LINE の制限: ラベル20文字、data 300文字、クイックリプライ13件
+const long = 'あ'.repeat(40), all = [menu, s1.message, ctx.wizardStep('w2|練習|2026-12-13|09:00|11:00', null, Array.from({ length: 20 }, (_, i) => long + i)).message];
+for (const m of all) { assert(m.quickReply.items.length <= 13); for (const i of m.quickReply.items) { assert(i.action.label.length <= 20, i.action.label); assert((i.action.data || '').length <= 300); } }
+console.log('wizard tests passed');

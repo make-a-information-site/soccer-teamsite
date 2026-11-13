@@ -1,7 +1,10 @@
 // 純粋ロジック(Google のサービスに触らない)。Code.gs から使う。
 var TYPES = ['練習', '練習試合', '公式戦'];
 var HELP = [
-  '【使い方】そのまま真似して送ってください',
+  '【かんたん入力】',
+  '「メニュー」と送ると、ボタンで日付・時間・会場を選べます。',
+  '',
+  '【文字で送る場合】そのまま真似して送ってください',
   '',
   '■予定をのせる',
   '予定 12/13 9:00-11:00 ○○グラウンド',
@@ -51,6 +54,7 @@ function parseCommand(text, now) {
     .replace(/(\d)時(\d{1,2})分?/g, '$1:$2').replace(/(\d)時/g, '$1:00').replace(/(\d{1,2})月(\d{1,2})日?/g, '$1/$2').trim();
   var k = t.split(/\s+/), head = k[0];
   if (head === '一覧') return { cmd: 'list' };
+  if (/^(メニュー|menu)$/i.test(head) || ((head === '予定' || head === '募集') && k.length === 1)) return { cmd: 'menu' };
   if (/^(ヘルプ|使い方|help)$/i.test(head)) return { cmd: 'help' };
   if (/^id$/i.test(head)) return { cmd: 'id' };
   if (head === '削除') {
@@ -97,4 +101,85 @@ function cleanForm(d) {
 function fmtRow(id, e) {
   var p = e.date.split('-');
   return id + ' ' + (+p[1]) + '/' + (+p[2]) + ' ' + e.start + (e.end ? '-' + e.end : '') + ' ' + e.place;
+}
+
+// ---------- ボタン入力(日付・時刻ピッカー) ----------
+// 途中経過は postback の data に持たせるので、サーバー側に状態を持たなくてよい。
+//   w1|種類                      → 日時ピッカーの結果(params.datetime)を受ける
+//   w2|種類|日付|開始|終了        → 終了時刻が決まった
+//   w2t|種類|日付|開始            → 終了時刻ピッカーの結果(params.time)を受ける
+//   w3|種類|日付|開始|終了|会場   → 会場が決まった(登録)
+var KINDS = ['練習', '練習試合', '公式戦', '募集'];
+var DURATIONS = [[60, '1時間'], [90, '1時間半'], [120, '2時間'], [150, '2時間半'], [180, '3時間']];
+
+function quick_(actions) { return { items: actions.slice(0, 13).map(function (a) { return { type: 'action', action: a }; }) }; }
+function addMinutes(hhmm, min) {
+  var p = hhmm.split(':'), t = +p[0] * 60 + +p[1] + min;
+  return t >= 24 * 60 ? null : pad2(Math.floor(t / 60)) + ':' + pad2(t % 60);
+}
+function jpDate(date) { var p = date.split('-'), w = new Date(+p[0], p[1] - 1, +p[2]).getDay(); return (+p[1]) + '/' + (+p[2]) + '(' + '日月火水木金土'.charAt(w) + ')'; }
+function kindLabel(kind) { return kind === '募集' ? '練習試合の相手を募集' : kind; }
+
+function menuMessage(now) {
+  var tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  var init = ymd(tomorrow) + 'T09:00', min = ymd(now) + 'T00:00', max = (now.getFullYear() + 1) + '-12-31T23:59';
+  function pick(label, kind) { return { type: 'datetimepicker', label: label, data: 'w1|' + kind, mode: 'datetime', initial: init, min: min, max: max }; }
+  return { type: 'text', text: '何をのせますか?\n下のボタンを押すと、日付と開始時刻を選べます。',
+    quickReply: quick_([pick('練習', '練習'), pick('練習試合', '練習試合'), pick('公式戦', '公式戦'), pick('相手を募集', '募集'),
+      { type: 'message', label: '一覧を見る', text: '一覧' }, { type: 'message', label: '使い方', text: 'ヘルプ' }]) };
+}
+
+function wizardCommand(kind, date, start, end, place) {
+  var o = { cmd: kind === '募集' ? 'slot' : 'schedule', date: date, start: start, end: end, place: String(place).replace(/[\r\n\t|]+/g, ' ').trim().slice(0, 40), note: '' };
+  if (o.cmd === 'schedule') o.type = kind;
+  return o;
+}
+
+// 戻り値: { message } 次の質問 / { message, pending } 会場の入力待ち / { create } 登録内容
+function wizardStep(data, params, places) {
+  var k = String(data || '').split('|'), step = k[0], kind = k[1], bad = { message: { type: 'text', text: 'もう一度「メニュー」と送って、最初からやり直してください。' } };
+  if (KINDS.indexOf(kind) < 0) return bad;
+  var date = k[2], start = k[3], end = k[4];
+  if (step === 'w1') {
+    var m = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}:\d{2})/.exec((params && params.datetime) || '');
+    if (!m) return bad;
+    date = m[1]; start = m[2];
+    var acts = [];
+    DURATIONS.forEach(function (d) {
+      var e = addMinutes(start, d[0]);
+      if (e) acts.push({ type: 'postback', label: d[1] + '(' + e + 'まで)', data: ['w2', kind, date, start, e].join('|'), displayText: e + 'まで' });
+    });
+    var pickEnd = { type: 'datetimepicker', label: '終了時刻を選ぶ', data: ['w2t', kind, date, start].join('|'), mode: 'time' }, guess = addMinutes(start, 120);
+    if (guess) pickEnd.initial = guess;
+    acts.push(pickEnd);
+    return { message: { type: 'text', text: kindLabel(kind) + '\n' + jpDate(date) + ' ' + start + ' 開始\n\n何時までですか?', quickReply: quick_(acts) } };
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !/^\d{2}:\d{2}$/.test(start || '')) return bad;
+  if (step === 'w2t') {
+    end = (params && params.time) || '';
+    if (!/^\d{2}:\d{2}$/.test(end) || end <= start)
+      return { message: { type: 'text', text: '終了時刻は、開始(' + start + ')より後にしてください。', quickReply: quick_([{ type: 'datetimepicker', label: '終了時刻を選び直す', data: ['w2t', kind, date, start].join('|'), mode: 'time' }]) } };
+    step = 'w2';
+  }
+  if (!/^\d{2}:\d{2}$/.test(end || '') || end <= start) return bad;
+  if (step === 'w2') {
+    var base = ['w3', kind, date, start, end].join('|') + '|';
+    var acts2 = (places || []).filter(function (p) { return p && (base + p).length <= 300; }).slice(0, 10)
+      .map(function (p) { return { type: 'postback', label: p.slice(0, 20), data: base + p, displayText: p }; });
+    var msg = { type: 'text', text: jpDate(date) + ' ' + start + '-' + end + '\n\n会場はどこですか?\n' + (acts2.length ? '下から選ぶか、' : '') + '会場名をそのまま送ってください。' };
+    if (acts2.length) msg.quickReply = quick_(acts2);
+    return { message: msg, pending: { kind: kind, date: date, start: start, end: end } };
+  }
+  if (step === 'w3') {
+    var c = wizardCommand(kind, date, start, end, k.slice(5).join('|'));
+    return c.place ? { create: c } : bad;
+  }
+  return bad;
+}
+
+// 最近使った会場(新しい順・重複なし)
+function recentPlaces(rows, limit) {
+  var seen = {}, out = [];
+  rows.slice().reverse().forEach(function (r) { var p = String(r.place || '').trim(); if (p && !seen[p]) { seen[p] = 1; out.push(p); } });
+  return out.slice(0, limit || 8);
 }
